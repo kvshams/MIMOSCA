@@ -33,9 +33,9 @@ import statsmodels
 from statsmodels.distributions.empirical_distribution import ECDF
 
 #GO imports
-#from goatools.obo_parser import GODag
-#from goatools.associations import read_ncbi_gene2go
-#from goatools.go_enrichment import GOEnrichmentStudy
+from goatools.obo_parser import GODag
+from goatools.associations import read_ncbi_gene2go
+from goatools.go_enrichment import GOEnrichmentStudy
 
 # The following packages are typically not installed by default in Python installations, but would enable some additional functionality
 #import Levenshtein (edit_dist)
@@ -1265,16 +1265,16 @@ def fano_variable(DGEtpm,input_mean=None,meanthresh=0.5,resthresh=0.05,f=0.25,hi
     #return variable genes
 
 ##########PCA stuff#########################
-
 def fb_pca(DGE,k=50):
-    if 'fbpca' in sys.modules:
-        [Ufb,Sfb,Vfb]=fbpca.pca(DGE,k)
-    else:
-        pca=sklearn.decomposition.PCA(n_components=k)
-        pca.fit(DGE)
-        Ufb=pca.fit_transform(DGE)
-        Sfb=pca.explained_variance_
-        Vfb=pca.components_
+    # for some reason 'fbpca' is giving error: AttributeError in fb_pca #5
+    #if 'fbpca' in sys.modules:
+    #    [Ufb,Sfb,Vfb]=fbpca.pca(DGE,k)
+    #else:
+    pca=sklearn.decomposition.PCA(n_components=k)
+    pca.fit(DGE)
+    Ufb=pca.fit_transform(DGE)
+    Sfb=pca.explained_variance_
+    Vfb=pca.components_
     Vfb=pd.DataFrame(Vfb).T
     Vfb.index=DGE.columns
     Ufb=pd.DataFrame(Ufb)
@@ -1497,14 +1497,16 @@ def within_without(B):
 
 
 #####GO analysis################
-def PCA2GO(DGEZ,sigpcs=15,thresh=2,repin=100,perin=0.005,fdr_thresh=0.1,species='human'):
+## GO analysis gives GODag not defined error even after importing the same
+# The error is not present if the pathedb is provided
+def PCA2GO(DGEZ,sigpcs=15,thresh=2,repin=100,perin=0.005,fdr_thresh=0.1,species='human', path2db='Path2obo/db/', Path2Xref='Path2Xref/'):
     
     #Jackstraw
     PVALS=jackstraw(DGEZ,sig_pcs=sigpcs,reps=repin,per=perin)
     print('done with jackstraw')
 
     #go analysis
-    path2db='Path2obo/db/'
+    #path2db='Path2obo/db/'
     obodag = GODag(path2db+"go-basic.obo")
 
     if (species=='human'):
@@ -1512,7 +1514,7 @@ def PCA2GO(DGEZ,sigpcs=15,thresh=2,repin=100,perin=0.005,fdr_thresh=0.1,species=
         geneid2gos = read_ncbi_gene2go(path2db+"gene2go", taxids=[9606])
         print("{N:,} annotated genes".format(N=len(geneid2gos)))
         these_genes = DGEZ.index
-        Xtable=pd.read_csv('Path2Xref/hg19_xref.txt',sep='\t')
+        Xtable=pd.read_csv(Path2Xref+"hg19_xref.txt",sep='\t')
         Xtable.index=Xtable['Approved Symbol']
         entrez=[int(x) for x in np.unique(Xtable.loc[these_genes].dropna()['EntrezGene ID'])]
 
@@ -1521,7 +1523,7 @@ def PCA2GO(DGEZ,sigpcs=15,thresh=2,repin=100,perin=0.005,fdr_thresh=0.1,species=
         geneid2gos = read_ncbi_gene2go(path2db+"gene2go", taxids=[10090])
         print("{N:,} annotated genes".format(N=len(geneid2gos)))
         these_genes = DGEZ.index
-        Xtable=pd.read_csv('Path2xref/biomart_xref.mm10.txt',sep='\t')
+        Xtable=pd.read_csv(Path2Xref+"biomart_xref.mm10.txt",sep='\t')
         Xtable=Xtable[['Associated Gene Name','EntrezGene ID']].dropna()
         Xtable.index=Xtable['Associated Gene Name']
         entrez=[int(x) for x in np.unique(Xtable.loc[these_genes].dropna()['EntrezGene ID'])]
@@ -1584,9 +1586,9 @@ def PCA2GO(DGEZ,sigpcs=15,thresh=2,repin=100,perin=0.005,fdr_thresh=0.1,species=
     return df_bigGO
     
  
-def DE2GO(df_p,background,sig_thresh=3,num_genes=None,fdr_thresh=0.1,species='human'):
+def DE2GO(df_p,background,sig_thresh=3,num_genes=None,fdr_thresh=0.1,species='human', path2db='Path2obo/db/', Path2Xref='Path2Xref/'):
     #go analysis
-    path2db='PATH2GOobofile/db/'
+    #path2db='Path2obo/db/'
     obodag = GODag(path2db+"go-basic.obo")
 
     if (species=='human'):
@@ -1594,7 +1596,7 @@ def DE2GO(df_p,background,sig_thresh=3,num_genes=None,fdr_thresh=0.1,species='hu
         geneid2gos = read_ncbi_gene2go(path2db+"gene2go", taxids=[9606])
         print("{N:,} annotated genes".format(N=len(geneid2gos)))
         these_genes = background
-        Xtable=pd.read_csv('PATH2hg19Xref/hg19_xref.txt',sep='\t')
+        Xtable=pd.read_csv(Path2Xref+"hg19_xref.txt",sep='\t')
         Xtable.index=Xtable['Approved Symbol']
         entrez=[int(x) for x in np.unique(Xtable.loc[these_genes].dropna()['EntrezGene ID'])]
 
@@ -1603,7 +1605,7 @@ def DE2GO(df_p,background,sig_thresh=3,num_genes=None,fdr_thresh=0.1,species='hu
         geneid2gos = read_ncbi_gene2go(path2db+"gene2go", taxids=[10090])
         print("{N:,} annotated genes".format(N=len(geneid2gos)))
         these_genes = background
-        Xtable=pd.read_csv('PATH2mm10xref/biomart_xref.mm10.txt',sep='\t')
+        Xtable=pd.read_csv(Path2Xref+"biomart_xref.mm10.txt",sep='\t')
         Xtable=Xtable[['Associated Gene Name','EntrezGene ID']].dropna()
         Xtable.index=Xtable['Associated Gene Name']
         entrez=[int(x) for x in np.unique(Xtable.loc[these_genes].dropna()['EntrezGene ID'])]
@@ -1675,9 +1677,9 @@ def DE2GO(df_p,background,sig_thresh=3,num_genes=None,fdr_thresh=0.1,species='hu
     return df_bigGO
 
 
-def TOPN2GO(df_p,background,num_genes=100,fdr_thresh=0.1,species='human'):
+def TOPN2GO(df_p,background,num_genes=100,fdr_thresh=0.1,species='human', path2db='Path2obo/db/', Path2Xref='Path2Xref/'):
     #go analysis
-    path2db='Path2obo/db/'
+    #path2db='Path2obo/db/'
     obodag = GODag(path2db+"go-basic.obo")
 
     if (species=='human'):
@@ -1685,7 +1687,7 @@ def TOPN2GO(df_p,background,num_genes=100,fdr_thresh=0.1,species='human'):
         geneid2gos = read_ncbi_gene2go(path2db+"gene2go", taxids=[9606])
         print("{N:,} annotated genes".format(N=len(geneid2gos)))
         these_genes = background
-        Xtable=pd.read_csv('PATH2xfref/hg19_xref.txt',sep='\t')
+        Xtable=pd.read_csv(Path2Xref+"hg19_xref.txt",sep='\t')
         Xtable.index=Xtable['Approved Symbol']
         entrez=[int(x) for x in np.unique(Xtable.loc[these_genes].dropna()['EntrezGene ID'])]
 
@@ -1694,7 +1696,7 @@ def TOPN2GO(df_p,background,num_genes=100,fdr_thresh=0.1,species='human'):
         geneid2gos = read_ncbi_gene2go(path2db+"gene2go", taxids=[10090])
         print("{N:,} annotated genes".format(N=len(geneid2gos)))
         these_genes = background
-        Xtable=pd.read_csv('PATH2xref/biomart_xref.mm10.txt',sep='\t')
+        Xtable=pd.read_csv(Path2Xref+"biomart_xref.mm10.txt",sep='\t')
         Xtable=Xtable[['Associated Gene Name','EntrezGene ID']].dropna()
         Xtable.index=Xtable['Associated Gene Name']
         entrez=[int(x) for x in np.unique(Xtable.loc[these_genes].dropna()['EntrezGene ID'])]
