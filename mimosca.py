@@ -1,35 +1,24 @@
-from __future__ import print_function
 import sys
 import pandas as pd
-import numpy.matlib
 import numpy as np
 import scipy
 import time
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import sklearn
 from sklearn import preprocessing
 from sklearn import mixture
-from sklearn.neighbors.kde import KernelDensity
+from sklearn.neighbors import KernelDensity
 import glob
 import seaborn as sns
 import collections 
-sns.set_context('talk')
-sns.set_style('white')
-sns.set_style("ticks")
 import re
 from scipy import sparse, io
 import os
 import math
 import csv
-import fbpca
-from matplotlib import rcParams
-import numpy as np
+from fbpca import pca
 import scipy.stats as stats
-from scipy.stats import gaussian_kde
 import statsmodels.api as sm
-import statsmodels
 from statsmodels.distributions.empirical_distribution import ECDF
 
 #GO imports
@@ -37,303 +26,248 @@ from goatools.obo_parser import GODag
 from goatools.associations import read_ncbi_gene2go
 from goatools.go_enrichment import GOEnrichmentStudy
 
-# The following packages are typically not installed by default in Python installations, but would enable some additional functionality
-#import Levenshtein (edit_dist)
-#import infomap (info_cluster) 
-#import networkx as nx (info_cluster)
+sns.set_context('talk')
+sns.set_style('white')
+sns.set_style("ticks")
 
+# The following packages are typically not installed by default in Python installations, but would enable some additional functionality
+# import Levenshtein (edit_dist)
+# import infomap (info_cluster) 
+# import networkx as nx (info_cluster)
 
 ## progress bar
 def update_progress(progress):
-    barLength = 10 # Modify this to change the length of the progress bar
+    barLength = 10  # Modify this to change the length of the progress bar
     status = ""
+
     if isinstance(progress, int):
         progress = float(progress)
+
     if not isinstance(progress, float):
         progress = 0
-        status = "error: progress var must be float\r\n"
-    if progress < 0:
+        status = "Error: progress var must be float\n"
+    elif progress < 0:
         progress = 0
-        status = "Halt...\r\n"
-    if progress >= 1:
+        status = "Halt...\n"
+    elif progress >= 1:
         progress = 1
-        status = "Done...\r\n"
-    block = int(round(barLength*progress))
-    text = "\rPercent: [{0}] {1}% {2}".format( "#"*block + "-"*(barLength-block), progress*100, status)
+        status = "Done...\n"
+
+    block = int(round(barLength * progress))
+    text = f"\rPercent: [{'#' * block + '-' * (barLength - block)}] {progress * 100}% {status}"
     sys.stdout.write(text)
     sys.stdout.flush()
 
 #######read input############
 def read_10x(pathin):
-    """Return Pandas Dataframe containing 10x dataset """
+    """Return Pandas DataFrame containing 10x dataset."""
     
-    mat=scipy.io.mmread(os.path.join(pathin, "matrix.mtx"))
+    mat = scipy.io.mmread(os.path.join(pathin, "matrix.mtx"))
+    
     genes_path = os.path.join(pathin, "genes.tsv")
-    gene_ids = [row[0] for row in csv.reader(open(genes_path), delimiter="\t")]
-    gene_names = [row[1] for row in csv.reader(open(genes_path), delimiter="\t")]
-
-    gene_final = [x+'_'+y for x,y in zip(gene_ids,gene_names)]
+    with open(genes_path) as f:
+        reader = csv.reader(f, delimiter="\t")
+        gene_ids, gene_names = zip(*reader)
+    
+    gene_final = [x+'_'+y for x, y in zip(gene_ids, gene_names)]
     
     barcodes_path = os.path.join(pathin, "barcodes.tsv")
-    barcodes = [row[0][0:14] for row in csv.reader(open(barcodes_path), delimiter="\t")]
+    with open(barcodes_path) as f:
+        barcodes = [row[0][0:14] for row in csv.reader(f, delimiter="\t")]
     
-    DGE=pd.DataFrame(mat.toarray())
-    
-    DGE.index=gene_final
-    DGE.columns=barcodes
+    DGE = pd.DataFrame(mat.toarray(), index=gene_final, columns=barcodes)
     
     return DGE
 
-
 def genenames_from10x(genelist):
-    """Return gene names from 10x index generated with read_10x """
-    genesymbol=[]
-    #ensemblid=[]
-    for i in range(len(genelist)):
-        curgene=genelist[i]
-        starts=[]
-        for x in re.finditer('_',curgene):
-            starts.append(x.start()+1)
-        genesymbol.append(curgene[starts[-1]:])
-        
-    return genesymbol#,ensemblid
+    """Return gene names from 10x index generated with read_10x."""
+    genesymbol = [gene.split('_')[-1] for gene in genelist]
+    return genesymbol #,ensemblid
 
 def genenames_from10x_mod(genelist):
-    """Return gene names from 10x index generated with read_10x """
-    genesymbol=[]
-    #ensemblid=[]
-    for i in range(len(genelist)):
-        curgene=genelist[i]
-        starts=[]
-        for x in re.finditer('_',curgene):
-            starts.append(x.start()+1)
-        genesymbol.append(curgene[starts[0]:])
-        
-    return genesymbol#,ensemblid
+    """Return gene names from 10x index generated with read_10x."""
+    genesymbol = [gene.split('_', 1)[-1] for gene in genelist]
+    return genesymbol #,ensemblid
 
 def collapse2gene(DGE):
-
-    DGE_gene=DGE.copy()
-    DGE_gene.index=genenames_from10x(DGE_gene.index)
-    DGE_gene=DGE_gene.groupby(DGE_gene.index).sum()
-
+    """Collapse 10x data to gene level"""
+    DGE.index = genenames_from10x(DGE.index)
+    DGE_gene = DGE.groupby(DGE.index).sum()
     return DGE_gene
 
 def guide2gene(guide):
-    """get genename between underscores"""
-    underscore_pos = []
-    count=0
-    if ('INTERGENIC' in guide):
-        nameout='INTERGENIC'
-    elif ('_' in guide):
-        for x in re.finditer('_',guide):
-            if count<2:
-                underscore_pos.append(x.span()[1])
+    """Get gene name between underscores."""
+    if 'INTERGENIC' in guide:
+        return 'INTERGENIC'
+    elif '_' in guide:
+        parts = guide.split('_')
+        if len(parts) >= 3:
+            return parts[1].replace('sg', '')
+    return guide
 
-        nameout=re.sub('sg','',guide[underscore_pos[0]:underscore_pos[1]-1])
-    else:
-        nameout=guide
-    return nameout
 
 def get_batches(cbcs):
-    """Return batch - last underscore in column names"""
-    batchvec=[]
-    for cell in cbcs:
-        starts=[]
-        for x in re.finditer('_',cell):
-            starts.append(x.start()+1)
-        batchvec.append(cell[starts[-2]:])
-        
+    """Return batch - last underscore in column names."""
+    batchvec = [cell.rsplit('_', 2)[-2] if cell.count('_') >= 2 else '' for cell in cbcs]
     return np.array(batchvec)
-  
+
 def genelevel_dict(GUIDES_DICT):
     """Collapse guide level dictionary to gene level using guide2gene"""
-    genes=[guide2gene(x) for x in GUIDES_DICT.keys()]
-    GUIDES_DICT_GENES={}
-    for gene in genes:
-        GUIDES_DICT_GENES[gene]=[]
-
-    for key in GUIDES_DICT.keys():
-        GUIDES_DICT_GENES[guide2gene(key)].extend(GUIDES_DICT[key])
+    GUIDES_DICT_GENES = defaultdict(list)
+    for key, value in GUIDES_DICT.items():
+        GUIDES_DICT_GENES[guide2gene(key)].extend(value)
     return GUIDES_DICT_GENES
 
-####transform data#######
-def tp10k_transform(DGE,norm_factor=1.0e4):
-    """normalize columns of pandas dataframe to sum to a constant, by default 10,000"""
-    return(norm_factor*(DGE / DGE.sum()))
+def tp10k_transform(DGE, norm_factor=1.0e4):
+    """Normalize columns of pandas dataframe to sum to a constant, by default 10,000"""
+    return norm_factor * (DGE / DGE.sum())
 
 def Zcells(DGE):
-    """Z transformation of columns of pandas"""
-    DGEZ=DGE.copy()
-    DGEZ=pd.DataFrame(sklearn.preprocessing.scale(DGE,axis=0))
-    DGEZ.index=DGE.index
-    DGEZ.columns=DGE.columns
-    return DGEZ
- 
-def Zgenes(DGE,batchvec=None):
-    """Z transformation of rows of pandas, option for per batch normalization"""
-    DGEZ=DGE.copy()
-    if batchvec is None:
-        DGEZ=pd.DataFrame(sklearn.preprocessing.scale(DGEZ,axis=1))
-        DGEZ.columns=DGE.columns
-        DGEZ.index=DGE.index
-    else:
-        batch=np.unique(batchvec)
-        for curbatch in batch:
-            DGEZ.ix[:,np.array(batchvec)==curbatch]=sklearn.preprocessing.scale(DGEZ.ix[:,np.array(batchvec)==curbatch],axis=1)
+    """Z transformation of columns of pandas DataFrame"""
+    DGEZ = DGE.apply(zscore, axis=0)
     return DGEZ
 
-def Zgenes_floor(DGE,floor=0,batchvec=None):
+def Zgenes(DGE, batchvec=None):
+    """Z transformation of rows of pandas DataFrame, option for per batch normalization"""
+    if batchvec is None:
+        DGEZ = DGE.apply(zscore, axis=1)
+    else:
+        DGEZ = DGE.copy()
+        for curbatch in np.unique(batchvec):
+            DGEZ.loc[:, batchvec == curbatch] = DGEZ.loc[:, batchvec == curbatch].apply(zscore, axis=1)
+    return DGEZ
+
+def Zgenes_floor(DGE, floor=0, batchvec=None):
     """Z transformation of rows of pandas dataframe, with flooring of std dev, option for per batch normalization"""
-    DGEZ=DGE.copy()
     if batchvec is None:
-        curstd=DGE.std(axis=1)+floor
-        curmean=DGE.mean(axis=1)
-        curZ=(DGEZ.subtract(curmean,axis=0)).divide(curstd,axis=0)
-        DGEZ=curZ
-        DGEZ.columns=DGE.columns
-        DGEZ.index=DGE.index
+        curstd = DGE.std(axis=1) + floor
+        curmean = DGE.mean(axis=1)
+        curZ = (DGE.subtract(curmean, axis=0)).divide(curstd, axis=0)
+        return curZ
     else:
-        batch=np.unique(batchvec)
-        for curbatch in batch:
-            curDGE=DGEZ.ix[:,np.array(batchvec)==curbatch]
-            curstd=curDGE.std(axis=1)+floor
-            curmean=curDGE.mean(axis=1)
-            curZ=(curDGE.subtract(curmean,axis=0)).divide(curstd,axis=0)
+        DGEZ = DGE.copy()
+        for curbatch in np.unique(batchvec):
+            curDGE = DGEZ.loc[:, batchvec == curbatch]
+            curstd = curDGE.std(axis=1) + floor
+            curmean = curDGE.mean(axis=1)
+            curZ = (curDGE.subtract(curmean, axis=0)).divide(curstd, axis=0)
+            DGEZ.loc[:, batchvec == curbatch] = curZ
+        return DGEZ
 
-            DGEZ.ix[:,np.array(batchvec)==curbatch]=np.array(curZ)
-    return DGEZ
-
-
-
-def Centergenes(DGE,batchvec=None):
+def Centergenes(DGE, batchvec=None):
     """Median centering of rows of pandas, option for per batch normalization"""
-
-    DGEC=DGE.copy()
     if batchvec is None:
-        DGEC=DGEC.subtract(DGEC.median(axis=1),axis='rows')
+        return DGE.subtract(DGE.median(axis=1), axis='rows')
     else:
-        batch=np.unique(batchvec)
-        for curbatch in batch:
-            DGEC.ix[:,np.array(batchvec)==curbatch]=DGEC.ix[:,np.array(batchvec)==curbatch].subtract(DGEC.ix[:,np.array(batchvec)==curbatch].median(axis=1),axis='rows')
-    return DGEC
+        DGEC = DGE.copy()
+        for curbatch in np.unique(batchvec):
+            DGEC.loc[:, batchvec == curbatch] = DGEC.loc[:, batchvec == curbatch].subtract(DGEC.loc[:, batchvec == curbatch].median(axis=1), axis='rows')
+        return DGEC
 
-def permute_matrix(DGE,bins=20,verbose=0):
+def permute_matrix(DGE, bins=20, verbose=0):
     """Permute genes based on similar expression levels"""
-    DGE_perm=DGE.copy()
-
-    GSUMS=np.sum(DGE,axis=1)
-
-    breakvec = np.linspace(1,100,bins)
-
-    breaks=[]
-    for breaker in breakvec:
-        breaks.append(np.percentile(GSUMS,breaker))
-    breaks=np.unique(breaks)
+    DGE_perm = DGE.copy()
+    GSUMS = DGE.sum(axis=1)
+    breaks = np.percentile(GSUMS, np.linspace(1, 100, bins))
+    breaks = np.unique(breaks)
 
     for i in range(len(breaks)-1):
-        if verbose==1:
-            print(np.round((1.0*i)/(len(breaks)-1)))
+        if verbose == 1:
+            print(f"{np.round((1.0 * i) / (len(breaks) - 1))}")
         for j in range(len(DGE.columns)):
-            curlogical=np.logical_and(GSUMS>breaks[i],GSUMS<=breaks[i+1])
-            DGE_perm.ix[curlogical,j]=np.random.permutation(DGE_perm.ix[curlogical,j])
+            curlogical = np.logical_and(GSUMS > breaks[i], GSUMS <= breaks[i + 1])
+            DGE_perm.loc[curlogical, j] = np.random.permutation(DGE_perm.loc[curlogical, j])
     return DGE_perm
 
-def downsample_reads(DF,per_reads=1.0,nrpc=None):
+def downsample_reads(DF, per_reads=1.0, nrpc=None):
+    """Downsample reads in the DataFrame"""
+    DF_mod = DF.copy()
+    numgenes = DF_mod.shape[0]
+    genenames = DF_mod.index
+    DF_mod.index = range(numgenes)
+    cells = DF_mod.columns
 
-    DF_mod=DF.copy()
-
-
-    numgenes=np.shape(DF_mod)[0]
-    genenames=DF_mod.index
-    DF_mod.index=range(numgenes)
-    cells=DF_mod.columns
-    
-    readspercell=np.sum(DF_mod,axis=0)
-    totalreads  =np.sum(readspercell)
-    newreads    =np.round(totalreads*per_reads)
-    cellpercents=np.divide(1.0*readspercell,totalreads)
+    readspercell = DF_mod.sum(axis=0)
+    totalreads = readspercell.sum()
+    newreads = round(totalreads * per_reads)
+    cellpercents = readspercell / totalreads
     if nrpc:
-        newreadspercell=nrpc
+        newreadspercell = nrpc
     else:
-        newreadspercell=[int(x) for x in np.round(np.multiply(cellpercents,newreads))]
-    
-    DF_out=pd.DataFrame()
- 
+        newreadspercell = [int(x) for x in round(cellpercents * newreads)]
+
+    DF_out = pd.DataFrame()
+
     for i in range(len(cells)):
-        vectorize=[]
-        curcell=DF_mod[cells[i]]
-        curcell=curcell[curcell!=0]
+        vectorize = []
+        curcell = DF_mod[cells[i]]
+        curcell = curcell[curcell != 0]
 
         for j in curcell.index:
-            vectorize.extend([j]*curcell[j])
+            vectorize.extend([j] * curcell[j])
 
-        vec_sample=np.random.choice(vectorize,size=newreadspercell[i],replace=False)
-        sampled_vec=np.histogram(vec_sample,bins=range(numgenes+1))[0]
-        DF_out[cells[i]]=sampled_vec
-            
-    DF_out.index=genenames
+        vec_sample = np.random.choice(vectorize, size=newreadspercell[i], replace=False)
+        sampled_vec = np.histogram(vec_sample, bins=range(numgenes + 1))[0]
+        DF_out[cells[i]] = sampled_vec
 
+    DF_out.index = genenames
     return DF_out
+
         
-def downsampler(DF,percell=1.0,perreads=1.0):
-        
-    if percell==1.0:
-        DF_sampled=DF.copy()
+def downsampler(DF, percell=1.0, perreads=1.0):
+    """Downsample cells and reads in the DataFrame"""
+    if percell == 1.0:
+        DF_sampled = DF.copy()
     else:
-        newcells=int(np.round(np.shape(DF)[1]*percell))
-        DF_sampled=DF.sample(newcells,axis=1)
+        newcells = int(round(DF.shape[1] * percell))
+        DF_sampled = DF.sample(newcells, axis=1)
     
-    if perreads==1.0:
+    if perreads == 1.0:
         return DF_sampled
     else:
-        return downsample_reads(DF_sampled,perreads)
+        return downsample_reads(DF_sampled, perreads)
 
 ###########generate covariates#########
-def dict2X(GUIDES_DICT,cbcs):
-    """convert guide cbc dictionary into covariate matrix"""
-    X=pd.DataFrame()
-    
+def dict2X(GUIDES_DICT, cbcs):
+    """Convert guide cbc dictionary into covariate matrix"""
+    X = pd.DataFrame()
+
     for key in GUIDES_DICT.keys():
-        curkey=[]
+        curkey = []
         for cbc in cbcs:
             if cbc in GUIDES_DICT[key]:
                 curkey.append(1)
             else:
                 curkey.append(0)
-        X[key]=np.array(curkey)
-        
-    X.index=cbcs
-    
+        X[key] = np.array(curkey)
+
+    X.index = cbcs
+
     return X
 
-
-def clusters2X(clusters,cbcs):
+def clusters2X(clusters, cbcs):
     """convert cell cluster cbc dictionary into covariate matrix"""
-    clusterun=clusters.columns
-    X=pd.DataFrame(np.zeros((len(cbcs),len(clusterun))))
-    X.index=cbcs
+    clusterun = clusters.columns
+    X = pd.DataFrame(np.zeros((len(cbcs), len(clusterun))))
+    X.index = cbcs
 
-    clusters_intersect=clusters.loc[list(set(clusters.index).intersection(set(cbcs)))]
+    clusters_intersect = clusters.loc[list(set(clusters.index).intersection(set(cbcs)))]
 
-
-
-    X.loc[clusters_intersect.index]=clusters_intersect
+    X.loc[clusters_intersect.index] = clusters_intersect
 
     return X
-
-
 def Xguides2genes(DF):
+    """Transform guide-level covariate dataframe to gene-level"""
+    Xgene = DF.copy()
 
-    Xgene=DF.copy()
-
-    Xgene=Xgene.T
-    Xgene.index=[guide2gene(x) for x in Xgene.index]
-    Xgene_group=(Xgene.groupby(Xgene.index).sum()>0).sum()
-    XgeneF=1.0*(Xgene.groupby(Xgene.index).sum()>0).T
+    Xgene = Xgene.T
+    Xgene.index = [guide2gene(x) for x in Xgene.index]
+    Xgene_group = (Xgene.groupby(Xgene.index).sum() > 0).sum()
+    XgeneF = 1.0 * (Xgene.groupby(Xgene.index).sum() > 0).T
 
     return XgeneF
-
+######### Updated until here
+#################
 
 def Y2FlatCov(Y,verbose=0):
     ngenes=np.shape(Y)[0]
