@@ -29,7 +29,7 @@ from goatools.go_enrichment import GOEnrichmentStudy
 sns.set_context('talk')
 sns.set_style('white')
 sns.set_style("ticks")
-
+### Improve the MIMOSCA libaries to most recent python versions
 # The following packages are typically not installed by default in Python installations, but would enable some additional functionality
 # import Levenshtein (edit_dist)
 # import infomap (info_cluster) 
